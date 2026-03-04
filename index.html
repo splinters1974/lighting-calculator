@@ -123,7 +123,7 @@ const state = {
     buildingType: 'office',
     costOverride: '',
     lightType: 'incandescent',
-    electricityRate: '25',
+    electricityRate: '29',
     sensors: false,
     quickMode: false,
     quickRooms: '',
@@ -198,16 +198,36 @@ function calc() {
     const overhead             = installCost * 0.08;
     const totalProjectCost     = installCost + overhead;
 
-    const paybackMonths  = annualSaving > 0 ? totalProjectCost / (annualSaving / 12) : null;
+    // Energy price escalation: 3% per year compounding
+    // Cumulative saving = sum of annualSaving * 1.03^(y-1) for y=1..roiYears
+    const ESCALATION = 0.03;
+    let cumulativeSaving = 0;
+    for (let y = 1; y <= state.roiYears; y++) {
+        cumulativeSaving += annualSaving * Math.pow(1 + ESCALATION, y - 1);
+    }
+
+    // Payback: find the month at which escalating cumulative savings cover project cost
+    let paybackMonths = null;
+    if (annualSaving > 0) {
+        let cumulative = 0;
+        for (let m = 1; m <= state.roiYears * 12 + 1; m++) {
+            const yearIndex = Math.floor((m - 1) / 12);
+            const monthSaving = (annualSaving * Math.pow(1 + ESCALATION, yearIndex)) / 12;
+            cumulative += monthSaving;
+            if (cumulative >= totalProjectCost) { paybackMonths = m; break; }
+        }
+        // Fallback to simple estimate if not paid back within roiYears window
+        if (!paybackMonths) paybackMonths = totalProjectCost / (annualSaving / 12);
+    }
     const paybackDisplay = paybackMonths
         ? `${Math.floor(paybackMonths / 12)}y ${Math.round(paybackMonths % 12)}m` : '—';
 
-    const cumulativeSaving = annualSaving * state.roiYears;
-    const netBenefit       = cumulativeSaving - totalProjectCost;
-    const roiPct           = totalProjectCost > 0 ? (netBenefit / totalProjectCost) * 100 : 0;
+    const netBenefit = cumulativeSaving - totalProjectCost;
+    const roiPct     = totalProjectCost > 0 ? (netBenefit / totalProjectCost) * 100 : 0;
 
     const leaseTermMonths    = state.roiYears * 12;
     const leaseMonthly       = totalProjectCost / leaseTermMonths;
+    // Lease monthly saving uses year-1 saving as baseline (conservative)
     const leaseMonthlySaving = annualSaving / 12 - leaseMonthly;
 
     const eaasMonthly       = currentMonthly * 0.75;
@@ -517,11 +537,11 @@ function renderResults() {
                         <span style="font-weight:700;font-size:16px;">${c.paybackDisplay}</span>
                     </div>
                     <div class="finance-row">
-                        <span style="font-size:13px;color:var(--kec-subtle);">Net benefit (${state.roiYears}y)</span>
+                        <span style="font-size:13px;color:var(--kec-subtle);">Net benefit (${state.roiYears}y, 3% escalation)</span>
                         <span style="font-weight:700;font-size:16px;color:${c.netBenefit >= 0 ? 'var(--kec-green)' : '#ef4444'};">${fmtGBP(Math.round(c.netBenefit))}</span>
                     </div>
                     <div class="finance-row" style="border-bottom:none;">
-                        <span style="font-size:13px;color:var(--kec-subtle);">ROI (${state.roiYears}y)</span>
+                        <span style="font-size:13px;color:var(--kec-subtle);">ROI (${state.roiYears}y, escalated)</span>
                         <span style="font-weight:700;font-size:16px;color:${c.roiPct >= 0 ? 'var(--kec-green)' : '#ef4444'};">${fmt(c.roiPct, 0)}%</span>
                     </div>
                 </div>
@@ -574,8 +594,9 @@ function renderResults() {
         <!-- Notes -->
         <div class="note-box" style="margin-bottom:24px;">
             <strong style="color:#e8edf2;">Assumptions: </strong>
-            Electricity at ${c.pencePerKwh}p/kWh · ${fmt(c.totalBulbs)} ${LIGHTING_SPECS[state.lightType].label} fittings at ${fmtGBP(c.costPerFitting)}/fitting
+            Electricity at ${c.pencePerKwh}p/kWh rising at 3% per year · ${fmt(c.totalBulbs)} ${LIGHTING_SPECS[state.lightType].label} fittings at ${fmtGBP(c.costPerFitting)}/fitting
             ${state.sensors ? ' + sensors (£30/fitting, ~15% usage reduction)' : ''} · 8% project overhead included ·
+            Savings and ROI figures reflect compounding energy price escalation over ${state.roiYears} years ·
             Finance lease based on ${state.roiYears}-year term · EaaS fee = 25% less than current monthly lighting spend ·
             This is an indicative estimate only.
         </div>
